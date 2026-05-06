@@ -25,6 +25,7 @@ A high-performance, **Headless Central Authentication Microservice**. This acts 
 .
 ├── proto/              # gRPC Protobuf definitions (.proto)
 ├── migrations/         # SQLx migration files
+├── tests/              # Integration tests (full HTTP + DB round-trips)
 ├── src/
 │   ├── main.rs         # Server orchestration (Axum + Tonic)
 │   ├── routes/         # REST Handlers (Public API)
@@ -35,6 +36,13 @@ A high-performance, **Headless Central Authentication Microservice**. This acts 
 ├── .env                # Secrets (DB_URL, JWT_PRIVATE_KEY)
 └── Cargo.toml
 ```
+
+## Testing
+- Unit tests live in the same file as the code under test, in a `#[cfg(test)]` module at the bottom.
+- Integration tests live in `tests/` — spin up the full Axum router and fire real HTTP requests.
+- Database tests use `#[sqlx::test]` which provisions an isolated throwaway database per test automatically — never share state between tests.
+- No mocking the database. Tests against data layer code must hit a real Postgres instance.
+- Run tests: `task test` (requires `task infra:up` first for DB-backed tests).
 
 ## Security Constraints & Rules
 - No Manual SQL: All queries must use sqlx::query! or sqlx::query_as! to prevent SQL injection.
