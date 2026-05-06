@@ -1,1 +1,7 @@
-// Business logic: password hashing (Argon2id), JWT signing/verification (Ed25519)
+mod error;
+mod jwt;
+mod password;
+
+pub use error::DomainError;
+pub use jwt::{Claims, JwtManager};
+pub use password::PasswordService;
