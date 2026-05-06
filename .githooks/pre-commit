@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "--- pre-commit: fmt ---"
+cargo fmt -- --check
+
+echo "--- pre-commit: clippy ---"
+cargo clippy
+
+echo "--- pre-commit: test ---"
+cargo test
