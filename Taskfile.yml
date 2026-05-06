@@ -1,0 +1,126 @@
+version: "3"
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  setup:
+    desc: First-time setup — copy .env, install required CLI tools
+    cmds:
+      - "[ -f .env ] || cp .env.example .env"
+      - cargo install sqlx-cli --no-default-features --features rustls,postgres
+      - cargo install cargo-watch
+      - cargo install cargo-chef --locked
+
+  dev:
+    desc: Start infra then run app with auto-reload
+    deps: [infra:up]
+    cmds:
+      - cargo watch -x run
+
+  build:
+    desc: Debug build
+    cmds:
+      - cargo build
+
+  release:
+    desc: Release build
+    cmds:
+      - cargo build --release
+
+  check:
+    desc: Type-check without building
+    cmds:
+      - cargo check
+
+  test:
+    desc: Run tests
+    cmds:
+      - cargo test
+
+  lint:
+    desc: Run clippy (warnings as errors)
+    cmds:
+      - cargo clippy -- -D warnings
+
+  fmt:
+    desc: Format code
+    cmds:
+      - cargo fmt
+
+  fmt:check:
+    desc: Check formatting without modifying
+    cmds:
+      - cargo fmt -- --check
+
+  ci:
+    desc: Full CI check — fmt, lint, test
+    cmds:
+      - task: fmt:check
+      - task: lint
+      - task: test
+
+  infra:up:
+    desc: Start Postgres + Redis
+    cmds:
+      - docker compose up -d
+
+  infra:down:
+    desc: Stop Postgres + Redis
+    cmds:
+      - docker compose down
+
+  infra:logs:
+    desc: Stream infra logs
+    cmds:
+      - docker compose logs -f
+
+  db:migrate:
+    desc: Run pending migrations
+    cmds:
+      - sqlx migrate run
+
+  db:revert:
+    desc: Revert last migration
+    cmds:
+      - sqlx migrate revert
+
+  db:add:
+    desc: "Create a new migration (usage: task db:add -- <name>)"
+    cmds:
+      - sqlx migrate add {{.CLI_ARGS}}
+
+  db:prepare:
+    desc: Generate .sqlx offline query cache (run after adding sqlx::query! macros)
+    cmds:
+      - cargo sqlx prepare
+
+  keys:gen:
+    desc: Generate Ed25519 keypair for JWT signing — output written to private.pem + public.pem
+    cmds:
+      - openssl genpkey -algorithm ED25519 -out private.pem
+      - openssl pkey -in private.pem -pubout -out public.pem
+      - echo "Copy the contents of private.pem and public.pem into JWT_PRIVATE_KEY_PEM / JWT_PUBLIC_KEY_PEM in .env"
+
+  docker:build:
+    desc: Build production Docker image
+    cmds:
+      - docker build -t rustauth .
+
+  docker:up:
+    desc: Start full production stack (app + infra)
+    cmds:
+      - docker compose --profile prod up -d
+
+  docker:down:
+    desc: Stop full production stack
+    cmds:
+      - docker compose --profile prod down
+
+  docker:logs:
+    desc: Stream production app logs
+    cmds:
+      - docker compose --profile prod logs -f app
