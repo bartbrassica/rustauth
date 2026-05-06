@@ -59,7 +59,11 @@ impl JwtManager {
             exp: (now + ttl).timestamp(),
             jti: Uuid::new_v4(),
         };
-        Ok(encode(&Header::new(Algorithm::EdDSA), &claims, &self.encoding_key)?)
+        Ok(encode(
+            &Header::new(Algorithm::EdDSA),
+            &claims,
+            &self.encoding_key,
+        )?)
     }
 }
 

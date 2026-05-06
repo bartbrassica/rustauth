@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); echo \"$f\" | grep -qE '\\.rs$' && cargo fmt -- --check && cargo clippy && cargo test",
+            "timeout": 120,
+            "statusMessage": "fmt / clippy / test..."
+          }
+        ]
+      }
+    ]
+  }
+}
