@@ -6,7 +6,10 @@ mod services;
 
 use std::{net::SocketAddr, sync::Arc};
 
-use axum::{Router, middleware as mw, routing::post};
+use axum::{
+    Router, middleware as mw,
+    routing::{get, post},
+};
 use dotenvy::dotenv;
 use sqlx::postgres::PgPoolOptions;
 use tonic::transport::Server as TonicServer;
@@ -82,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(rate_limited)
         .route("/refresh", post(routes::refresh))
         .route("/logout", post(routes::logout))
+        .route("/me", get(routes::me))
         .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind(&http_addr).await?;

@@ -13,6 +13,7 @@ use crate::{
     AppState,
     data::{DataError, TokenStore, UserRepository},
     domain::DomainError,
+    middleware::AuthUser,
 };
 
 // --- /register ---
@@ -141,6 +142,21 @@ pub async fn refresh(
         access_token,
         refresh_token,
     }))
+}
+
+// --- /me ---
+
+#[derive(Serialize)]
+pub struct MeResponse {
+    pub id: Uuid,
+    pub email: String,
+}
+
+pub async fn me(AuthUser(claims): AuthUser) -> Json<MeResponse> {
+    Json(MeResponse {
+        id: claims.sub,
+        email: claims.email,
+    })
 }
 
 // --- /logout ---
