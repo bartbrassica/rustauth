@@ -518,3 +518,137 @@ async fn logout_with_empty_token_returns_422(pool: PgPool) {
 
     assert_eq!(res.status(), 422);
 }
+
+// --- PATCH /me/password ---
+
+async fn register_and_login(base: &str, client: &reqwest::Client) -> serde_json::Value {
+    client
+        .post(format!("{base}/register"))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
+        .send()
+        .await
+        .unwrap();
+    client
+        .post(format!("{base}/login"))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+}
+
+#[sqlx::test]
+async fn change_password_returns_204_and_allows_login_with_new(pool: PgPool) {
+    let base = spawn_app(pool).await;
+    let client = reqwest::Client::new();
+    let tokens = register_and_login(&base, &client).await;
+
+    let res = client
+        .patch(format!("{base}/me/password"))
+        .bearer_auth(tokens["access_token"].as_str().unwrap())
+        .json(&serde_json::json!({"current_password": "hunter2!", "new_password": "new_secret!"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+
+    let login_new = client
+        .post(format!("{base}/login"))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "new_secret!"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login_new.status(), 200);
+
+    let login_old = client
+        .post(format!("{base}/login"))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login_old.status(), 401);
+}
+
+#[sqlx::test]
+async fn change_password_with_wrong_current_returns_401(pool: PgPool) {
+    let base = spawn_app(pool).await;
+    let client = reqwest::Client::new();
+    let tokens = register_and_login(&base, &client).await;
+
+    let res = client
+        .patch(format!("{base}/me/password"))
+        .bearer_auth(tokens["access_token"].as_str().unwrap())
+        .json(&serde_json::json!({"current_password": "wrongpassword", "new_password": "new_secret!"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+}
+
+#[sqlx::test]
+async fn change_password_without_token_returns_401(pool: PgPool) {
+    let base = spawn_app(pool).await;
+
+    let res = reqwest::Client::new()
+        .patch(format!("{base}/me/password"))
+        .json(&serde_json::json!({"current_password": "hunter2!", "new_password": "new_secret!"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+}
+
+#[sqlx::test]
+async fn change_password_with_short_new_password_returns_422(pool: PgPool) {
+    let base = spawn_app(pool).await;
+    let client = reqwest::Client::new();
+    let tokens = register_and_login(&base, &client).await;
+
+    let res = client
+        .patch(format!("{base}/me/password"))
+        .bearer_auth(tokens["access_token"].as_str().unwrap())
+        .json(&serde_json::json!({"current_password": "hunter2!", "new_password": "short"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 422);
+}
+
+// --- DELETE /me ---
+
+#[sqlx::test]
+async fn delete_me_returns_204_and_prevents_login(pool: PgPool) {
+    let base = spawn_app(pool).await;
+    let client = reqwest::Client::new();
+    let tokens = register_and_login(&base, &client).await;
+
+    let res = client
+        .delete(format!("{base}/me"))
+        .bearer_auth(tokens["access_token"].as_str().unwrap())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+
+    let login_after = client
+        .post(format!("{base}/login"))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login_after.status(), 401);
+}
+
+#[sqlx::test]
+async fn delete_me_without_token_returns_401(pool: PgPool) {
+    let base = spawn_app(pool).await;
+
+    let res = reqwest::Client::new()
+        .delete(format!("{base}/me"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+}

@@ -235,6 +235,65 @@ pub async fn me(AuthUser(claims): AuthUser) -> Json<MeResponse> {
     })
 }
 
+// --- PATCH /me/password ---
+
+#[derive(Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+impl ChangePasswordRequest {
+    fn validate(&self) -> Result<(), ApiError> {
+        if self.current_password.is_empty() {
+            return Err(ApiError::Validation("current_password is required".into()));
+        }
+        if self.current_password.len() > 128 {
+            return Err(ApiError::Validation("current_password too long".into()));
+        }
+        validate_password(&self.new_password)?;
+        Ok(())
+    }
+}
+
+pub async fn change_password(
+    AuthUser(claims): AuthUser,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
+    Json(body): Json<ChangePasswordRequest>,
+) -> Result<StatusCode, ApiError> {
+    body.validate()?;
+    let repo = UserRepository::new(&state.pool);
+    let user = repo
+        .find_by_id(claims.sub)
+        .await?
+        .ok_or(ApiError::Unauthorized)?;
+    if !state
+        .passwords
+        .verify(&body.current_password, &user.password_hash)?
+    {
+        tracing::warn!(user_id = %claims.sub, ip = %addr.ip(), event = "change_password_failed", reason = "wrong_current_password");
+        return Err(ApiError::Unauthorized);
+    }
+    let new_hash = state.passwords.hash(&body.new_password)?;
+    repo.update_password(claims.sub, &new_hash).await?;
+    tracing::info!(user_id = %claims.sub, ip = %addr.ip(), event = "password_changed");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- DELETE /me ---
+
+pub async fn delete_me(
+    AuthUser(claims): AuthUser,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, ApiError> {
+    let repo = UserRepository::new(&state.pool);
+    repo.delete(claims.sub).await?;
+    tracing::info!(user_id = %claims.sub, ip = %addr.ip(), event = "account_deleted");
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // --- /logout ---
 
 #[derive(Deserialize)]
@@ -485,5 +544,56 @@ mod tests {
             refresh_token: "some.jwt.token".into(),
         };
         assert!(req.validate().is_ok());
+    }
+
+    // --- ChangePasswordRequest::validate ---
+
+    fn cp_ok(current: &str, new: &str) {
+        let req = ChangePasswordRequest {
+            current_password: current.into(),
+            new_password: new.into(),
+        };
+        assert!(
+            req.validate().is_ok(),
+            "expected ok for current={current:?} new={new:?}"
+        );
+    }
+
+    fn cp_err(current: &str, new: &str) {
+        let req = ChangePasswordRequest {
+            current_password: current.into(),
+            new_password: new.into(),
+        };
+        assert!(
+            req.validate().is_err(),
+            "expected err for current={current:?} new={new:?}"
+        );
+    }
+
+    #[test]
+    fn change_password_valid_inputs_pass() {
+        cp_ok("oldpassword", "newpassword");
+        cp_ok("a", "12345678");
+        cp_ok(&"a".repeat(128), "12345678");
+    }
+
+    #[test]
+    fn change_password_empty_current_fails() {
+        cp_err("", "newpassword");
+    }
+
+    #[test]
+    fn change_password_current_over_128_fails() {
+        cp_err(&"a".repeat(129), "newpassword");
+    }
+
+    #[test]
+    fn change_password_new_too_short_fails() {
+        cp_err("oldpassword", "short");
+    }
+
+    #[test]
+    fn change_password_new_too_long_fails() {
+        cp_err("oldpassword", &"a".repeat(129));
     }
 }
