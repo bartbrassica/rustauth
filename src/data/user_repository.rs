@@ -40,6 +40,36 @@ impl<'a> UserRepository<'a> {
             .await
             .map_err(DataError::from_sqlx)
     }
+
+    pub async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, DataError> {
+        sqlx::query_as!(User, "SELECT * FROM users WHERE id = $1", id)
+            .fetch_optional(self.pool)
+            .await
+            .map_err(DataError::from_sqlx)
+    }
+
+    pub async fn update_password(&self, id: Uuid, new_hash: &str) -> Result<(), DataError> {
+        let result = sqlx::query!(
+            "UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2",
+            new_hash,
+            id
+        )
+        .execute(self.pool)
+        .await
+        .map_err(DataError::from_sqlx)?;
+        if result.rows_affected() == 0 {
+            return Err(DataError::NotFound);
+        }
+        Ok(())
+    }
+
+    pub async fn delete(&self, id: Uuid) -> Result<(), DataError> {
+        sqlx::query!("DELETE FROM users WHERE id = $1", id)
+            .execute(self.pool)
+            .await
+            .map_err(DataError::from_sqlx)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -79,5 +109,56 @@ mod tests {
         repo.create("bob@example.com", "hash1").await.unwrap();
         let err = repo.create("bob@example.com", "hash2").await.unwrap_err();
         assert!(matches!(err, DataError::EmailConflict));
+    }
+
+    #[sqlx::test]
+    async fn find_by_id_returns_user(pool: PgPool) {
+        let repo = UserRepository::new(&pool);
+        let created = repo.create("alice@example.com", "hash").await.unwrap();
+        let found = repo
+            .find_by_id(created.id)
+            .await
+            .unwrap()
+            .expect("should exist");
+        assert_eq!(found.id, created.id);
+        assert_eq!(found.email, "alice@example.com");
+    }
+
+    #[sqlx::test]
+    async fn find_by_id_returns_none_for_unknown(pool: PgPool) {
+        let repo = UserRepository::new(&pool);
+        let result = repo.find_by_id(Uuid::new_v4()).await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[sqlx::test]
+    async fn update_password_changes_hash(pool: PgPool) {
+        let repo = UserRepository::new(&pool);
+        let user = repo.create("alice@example.com", "old_hash").await.unwrap();
+        repo.update_password(user.id, "new_hash").await.unwrap();
+        let updated = repo.find_by_id(user.id).await.unwrap().unwrap();
+        assert_eq!(updated.password_hash, "new_hash");
+        assert!(
+            updated.updated_at > updated.created_at || updated.updated_at >= updated.created_at
+        );
+    }
+
+    #[sqlx::test]
+    async fn update_password_on_nonexistent_returns_not_found(pool: PgPool) {
+        let repo = UserRepository::new(&pool);
+        let err = repo
+            .update_password(Uuid::new_v4(), "hash")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, DataError::NotFound));
+    }
+
+    #[sqlx::test]
+    async fn delete_removes_user(pool: PgPool) {
+        let repo = UserRepository::new(&pool);
+        let user = repo.create("alice@example.com", "hash").await.unwrap();
+        repo.delete(user.id).await.unwrap();
+        let result = repo.find_by_id(user.id).await.unwrap();
+        assert!(result.is_none());
     }
 }

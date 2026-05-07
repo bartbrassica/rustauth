@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::{
     Router, middleware as mw,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 
 use domain::{JwtManager, PasswordService};
@@ -28,7 +28,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/login", post(routes::login))
         .route("/refresh", post(routes::refresh))
         .route("/logout", post(routes::logout))
-        .route("/me", get(routes::me))
+        .route("/me", get(routes::me).delete(routes::delete_me))
+        .route("/me/password", patch(routes::change_password))
         .with_state(state)
 }
 
@@ -46,6 +47,7 @@ pub fn build_production_router(state: AppState) -> Router {
         .merge(rate_limited)
         .route("/refresh", post(routes::refresh))
         .route("/logout", post(routes::logout))
-        .route("/me", get(routes::me))
+        .route("/me", get(routes::me).delete(routes::delete_me))
+        .route("/me/password", patch(routes::change_password))
         .with_state(state)
 }
