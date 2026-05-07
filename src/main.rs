@@ -4,9 +4,9 @@ mod middleware;
 mod routes;
 mod services;
 
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
-use axum::{Router, routing::post};
+use axum::{Router, middleware as mw, routing::post};
 use dotenvy::dotenv;
 use sqlx::postgres::PgPoolOptions;
 use tonic::transport::Server as TonicServer;
@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
     let jwt_private_pem = std::env::var("JWT_PRIVATE_KEY_PEM")?;
     let jwt_public_pem = std::env::var("JWT_PUBLIC_KEY_PEM")?;
     let http_addr = std::env::var("HTTP_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
-    let grpc_addr: std::net::SocketAddr = std::env::var("GRPC_ADDR")
+    let grpc_addr: SocketAddr = std::env::var("GRPC_ADDR")
         .unwrap_or_else(|_| "0.0.0.0:50051".to_string())
         .parse()?;
 
@@ -68,9 +68,18 @@ async fn main() -> anyhow::Result<()> {
         redis,
     };
 
-    let app = Router::new()
-        .route("/register", post(routes::register))
+    // /login and /register are rate-limited; /refresh and /logout are not
+    // (they already require a valid JWT or refresh token).
+    let rate_limited = Router::new()
         .route("/login", post(routes::login))
+        .route("/register", post(routes::register))
+        .route_layer(mw::from_fn_with_state(
+            state.clone(),
+            middleware::rate_limit,
+        ));
+
+    let app = Router::new()
+        .merge(rate_limited)
         .route("/refresh", post(routes::refresh))
         .route("/logout", post(routes::logout))
         .with_state(state.clone());
@@ -85,9 +94,12 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::try_join!(
         async {
-            axum::serve(listener, app)
-                .await
-                .map_err(anyhow::Error::from)
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .map_err(anyhow::Error::from)
         },
         async { grpc.await.map_err(anyhow::Error::from) },
     )?;

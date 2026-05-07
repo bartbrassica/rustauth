@@ -1,10 +1,20 @@
+use std::net::SocketAddr;
+
 use axum::{
     extract::FromRequestParts,
-    http::{StatusCode, header, request::Parts},
+    http::{header, request::Parts},
+};
+use axum::{
+    extract::{ConnectInfo, Request, State},
+    http::StatusCode,
+    middleware::Next,
     response::{IntoResponse, Response},
 };
+use redis::AsyncCommands;
 
 use crate::{AppState, domain::Claims};
+
+// --- JWT auth extractor ---
 
 /// Extractor that validates the `Authorization: Bearer <token>` header
 /// and injects the verified [`Claims`] into the handler.
@@ -48,4 +58,45 @@ impl IntoResponse for AuthError {
         };
         (status, body).into_response()
     }
+}
+
+// --- Rate limiting middleware ---
+
+const RATE_LIMIT_MAX: u64 = 5;
+const RATE_LIMIT_WINDOW_SECS: i64 = 60;
+
+/// Per-IP rate limiter backed by Redis. Allows [`RATE_LIMIT_MAX`] requests per
+/// [`RATE_LIMIT_WINDOW_SECS`] seconds. Fails open if Redis is unavailable so a
+/// cache outage never takes down the auth service.
+pub async fn rate_limit(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    let ip = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let route = request.uri().path().to_owned();
+    let key = format!("rl:{route}:{ip}");
+
+    match check_rate_limit(&state.redis, &key).await {
+        Ok(true) => {
+            tracing::warn!(ip = %ip, route = %route, event = "rate_limit_exceeded");
+            (StatusCode::TOO_MANY_REQUESTS, "too many requests").into_response()
+        }
+        Ok(false) => next.run(request).await,
+        Err(e) => {
+            tracing::error!(error = %e, "rate limiter unavailable, failing open");
+            next.run(request).await
+        }
+    }
+}
+
+async fn check_rate_limit(redis: &redis::Client, key: &str) -> redis::RedisResult<bool> {
+    let mut conn = redis.get_multiplexed_async_connection().await?;
+    let count: u64 = conn.incr(key, 1u64).await?;
+    // Only set TTL on the first increment to avoid resetting the window on each hit.
+    if count == 1 {
+        let _: () = conn.expire(key, RATE_LIMIT_WINDOW_SECS).await?;
+    }
+    Ok(count > RATE_LIMIT_MAX)
 }
