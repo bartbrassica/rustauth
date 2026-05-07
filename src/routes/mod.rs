@@ -24,6 +24,56 @@ pub struct RegisterRequest {
     pub password: String,
 }
 
+impl RegisterRequest {
+    fn validate(&self) -> Result<(), ApiError> {
+        validate_email(&self.email)?;
+        validate_password(&self.password)?;
+        Ok(())
+    }
+}
+
+fn validate_email(email: &str) -> Result<(), ApiError> {
+    if email.len() > 254 {
+        return Err(ApiError::Validation("email too long".into()));
+    }
+    let at = email
+        .find('@')
+        .ok_or_else(|| ApiError::Validation("invalid email".into()))?;
+    // Reject multiple @ signs
+    if email[at + 1..].contains('@') {
+        return Err(ApiError::Validation("invalid email".into()));
+    }
+    let local = &email[..at];
+    let domain = &email[at + 1..];
+    if local.is_empty() || local.len() > 64 {
+        return Err(ApiError::Validation("invalid email".into()));
+    }
+    // Domain must have at least one dot, not at the start or end
+    if domain.starts_with('.') {
+        return Err(ApiError::Validation("invalid email".into()));
+    }
+    let dot = domain
+        .rfind('.')
+        .ok_or_else(|| ApiError::Validation("invalid email".into()))?;
+    if domain[dot + 1..].is_empty() {
+        return Err(ApiError::Validation("invalid email".into()));
+    }
+    Ok(())
+}
+
+fn validate_password(password: &str) -> Result<(), ApiError> {
+    if password.len() < 8 {
+        return Err(ApiError::Validation(
+            "password must be at least 8 characters".into(),
+        ));
+    }
+    // Upper bound prevents Argon2 DoS via extremely long inputs
+    if password.len() > 128 {
+        return Err(ApiError::Validation("password too long".into()));
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
 pub struct RegisterResponse {
     pub id: Uuid,
@@ -35,6 +85,7 @@ pub async fn register(
     State(state): State<AppState>,
     Json(body): Json<RegisterRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    body.validate()?;
     let hash = state.passwords.hash(&body.password)?;
     let repo = UserRepository::new(&state.pool);
     let user = repo.create(&body.email, &hash).await.map_err(|e| {
@@ -61,6 +112,20 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+impl LoginRequest {
+    fn validate(&self) -> Result<(), ApiError> {
+        validate_email(&self.email)?;
+        if self.password.is_empty() {
+            return Err(ApiError::Validation("password is required".into()));
+        }
+        // Upper bound prevents Argon2 DoS via extremely long inputs during verify
+        if self.password.len() > 128 {
+            return Err(ApiError::Validation("password too long".into()));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Serialize)]
 pub struct LoginResponse {
     pub access_token: String,
@@ -72,6 +137,7 @@ pub async fn login(
     State(state): State<AppState>,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ApiError> {
+    body.validate()?;
     let repo = UserRepository::new(&state.pool);
     let user = match repo.find_by_email(&body.email).await? {
         Some(u) => u,
@@ -110,11 +176,21 @@ pub struct RefreshRequest {
     pub refresh_token: String,
 }
 
+impl RefreshRequest {
+    fn validate(&self) -> Result<(), ApiError> {
+        if self.refresh_token.is_empty() {
+            return Err(ApiError::Validation("refresh_token is required".into()));
+        }
+        Ok(())
+    }
+}
+
 pub async fn refresh(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
     Json(body): Json<RefreshRequest>,
 ) -> Result<Json<LoginResponse>, ApiError> {
+    body.validate()?;
     let claims = state.jwt.verify_refresh(&body.refresh_token).map_err(|_| {
         tracing::warn!(ip = %addr.ip(), event = "refresh_failed", reason = "invalid_token");
         ApiError::Unauthorized
@@ -166,11 +242,21 @@ pub struct LogoutRequest {
     pub refresh_token: String,
 }
 
+impl LogoutRequest {
+    fn validate(&self) -> Result<(), ApiError> {
+        if self.refresh_token.is_empty() {
+            return Err(ApiError::Validation("refresh_token is required".into()));
+        }
+        Ok(())
+    }
+}
+
 pub async fn logout(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
     Json(body): Json<LogoutRequest>,
 ) -> Result<StatusCode, ApiError> {
+    body.validate()?;
     let claims = state.jwt.verify_refresh(&body.refresh_token).map_err(|_| {
         tracing::warn!(ip = %addr.ip(), event = "logout_failed", reason = "invalid_token");
         ApiError::Unauthorized
@@ -187,6 +273,7 @@ pub async fn logout(
 pub enum ApiError {
     Conflict,
     Unauthorized,
+    Validation(String),
     Internal,
 }
 
@@ -210,11 +297,193 @@ impl From<DataError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, message) = match self {
-            Self::Conflict => (StatusCode::CONFLICT, "email already registered"),
-            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "invalid credentials"),
-            Self::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
+        match self {
+            Self::Conflict => (StatusCode::CONFLICT, "email already registered").into_response(),
+            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "invalid credentials").into_response(),
+            Self::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response(),
+            Self::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ok(email: &str, password: &str) {
+        let req = RegisterRequest {
+            email: email.into(),
+            password: password.into(),
         };
-        (status, message).into_response()
+        assert!(
+            req.validate().is_ok(),
+            "expected ok for email={email:?} password={password:?}"
+        );
+    }
+
+    fn err(email: &str, password: &str) {
+        let req = RegisterRequest {
+            email: email.into(),
+            password: password.into(),
+        };
+        assert!(
+            req.validate().is_err(),
+            "expected err for email={email:?} password={password:?}"
+        );
+    }
+
+    #[test]
+    fn valid_inputs_pass() {
+        ok("alice@example.com", "password123");
+        ok("a@b.io", "password123");
+        ok("user+tag@sub.domain.org", "password123");
+    }
+
+    #[test]
+    fn email_missing_at_fails() {
+        err("notanemail", "password123");
+    }
+
+    #[test]
+    fn email_empty_local_part_fails() {
+        err("@example.com", "password123");
+    }
+
+    #[test]
+    fn email_no_dot_in_domain_fails() {
+        err("user@nodot", "password123");
+    }
+
+    #[test]
+    fn email_domain_starts_with_dot_fails() {
+        err("user@.example.com", "password123");
+    }
+
+    #[test]
+    fn email_domain_ends_with_dot_fails() {
+        err("user@example.", "password123");
+    }
+
+    #[test]
+    fn email_multiple_at_signs_fails() {
+        err("a@b@c.com", "password123");
+    }
+
+    #[test]
+    fn email_too_long_fails() {
+        let long = format!("{}@example.com", "a".repeat(245));
+        err(&long, "password123");
+    }
+
+    #[test]
+    fn password_empty_fails() {
+        err("alice@example.com", "");
+    }
+
+    #[test]
+    fn password_too_short_fails() {
+        err("alice@example.com", "short");
+        err("alice@example.com", "1234567"); // 7 chars
+    }
+
+    #[test]
+    fn password_exactly_8_chars_passes() {
+        ok("alice@example.com", "12345678");
+    }
+
+    #[test]
+    fn password_too_long_fails() {
+        let long = "a".repeat(129);
+        err("alice@example.com", &long);
+    }
+
+    #[test]
+    fn password_exactly_128_chars_passes() {
+        ok("alice@example.com", &"a".repeat(128));
+    }
+
+    // --- LoginRequest::validate ---
+
+    fn login_ok(email: &str, password: &str) {
+        let req = LoginRequest {
+            email: email.into(),
+            password: password.into(),
+        };
+        assert!(
+            req.validate().is_ok(),
+            "expected ok for email={email:?} password={password:?}"
+        );
+    }
+
+    fn login_err(email: &str, password: &str) {
+        let req = LoginRequest {
+            email: email.into(),
+            password: password.into(),
+        };
+        assert!(
+            req.validate().is_err(),
+            "expected err for email={email:?} password={password:?}"
+        );
+    }
+
+    #[test]
+    fn login_valid_inputs_pass() {
+        login_ok("alice@example.com", "anypassword");
+        // Short password is allowed on login — policy only enforced on register
+        login_ok("alice@example.com", "short");
+        login_ok("alice@example.com", &"a".repeat(128));
+    }
+
+    #[test]
+    fn login_invalid_email_fails() {
+        login_err("notanemail", "anypassword");
+        login_err("@example.com", "anypassword");
+        login_err("user@nodot", "anypassword");
+    }
+
+    #[test]
+    fn login_empty_password_fails() {
+        login_err("alice@example.com", "");
+    }
+
+    #[test]
+    fn login_password_over_128_chars_fails() {
+        login_err("alice@example.com", &"a".repeat(129));
+    }
+
+    // --- RefreshRequest::validate ---
+
+    #[test]
+    fn refresh_empty_token_fails() {
+        let req = RefreshRequest {
+            refresh_token: "".into(),
+        };
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn refresh_non_empty_token_passes() {
+        let req = RefreshRequest {
+            refresh_token: "some.jwt.token".into(),
+        };
+        assert!(req.validate().is_ok());
+    }
+
+    // --- LogoutRequest::validate ---
+
+    #[test]
+    fn logout_empty_token_fails() {
+        let req = LogoutRequest {
+            refresh_token: "".into(),
+        };
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn logout_non_empty_token_passes() {
+        let req = LogoutRequest {
+            refresh_token: "some.jwt.token".into(),
+        };
+        assert!(req.validate().is_ok());
     }
 }
