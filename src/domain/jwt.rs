@@ -39,8 +39,14 @@ impl JwtManager {
         self.sign(user_id, email, self.access_ttl)
     }
 
-    pub fn sign_refresh_token(&self, user_id: Uuid, email: &str) -> Result<String, DomainError> {
-        self.sign(user_id, email, self.refresh_ttl)
+    /// Returns `(token, jti)` so the caller can store the JTI in Redis without re-decoding.
+    pub fn sign_refresh_token(
+        &self,
+        user_id: Uuid,
+        email: &str,
+    ) -> Result<(String, Uuid), DomainError> {
+        let (token, claims) = self.sign_with_claims(user_id, email, self.refresh_ttl)?;
+        Ok((token, claims.jti))
     }
 
     pub fn verify(&self, token: &str) -> Result<Claims, DomainError> {
@@ -51,6 +57,16 @@ impl JwtManager {
     }
 
     fn sign(&self, user_id: Uuid, email: &str, ttl: Duration) -> Result<String, DomainError> {
+        let (token, _) = self.sign_with_claims(user_id, email, ttl)?;
+        Ok(token)
+    }
+
+    fn sign_with_claims(
+        &self,
+        user_id: Uuid,
+        email: &str,
+        ttl: Duration,
+    ) -> Result<(String, Claims), DomainError> {
         let now = Utc::now();
         let claims = Claims {
             sub: user_id,
@@ -59,11 +75,8 @@ impl JwtManager {
             exp: (now + ttl).timestamp(),
             jti: Uuid::new_v4(),
         };
-        Ok(encode(
-            &Header::new(Algorithm::EdDSA),
-            &claims,
-            &self.encoding_key,
-        )?)
+        let token = encode(&Header::new(Algorithm::EdDSA), &claims, &self.encoding_key)?;
+        Ok((token, claims))
     }
 }
 
@@ -97,9 +110,10 @@ MCowBQYDK2VwAyEADyia6fy2lW6Ezrs11/ZGt0axfBAfMSJu+rfdNbu62/Y=
     fn refresh_token_roundtrip() {
         let mgr = manager();
         let user_id = Uuid::new_v4();
-        let token = mgr.sign_refresh_token(user_id, "bob@example.com").unwrap();
+        let (token, jti) = mgr.sign_refresh_token(user_id, "bob@example.com").unwrap();
         let claims = mgr.verify(&token).unwrap();
         assert_eq!(claims.sub, user_id);
+        assert_eq!(claims.jti, jti);
     }
 
     #[test]
