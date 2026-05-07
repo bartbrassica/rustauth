@@ -43,8 +43,10 @@ A high-performance, **Headless Central Authentication Microservice**. This acts 
 - Database tests use `#[sqlx::test]` which provisions an isolated throwaway database per test automatically — never share state between tests.
 - No mocking the database. Tests against data layer code must hit a real Postgres instance.
 - Run tests: `task test` (requires `task infra:up` first for DB-backed tests).
+- **After every code change, write unit tests for the modified logic and integration tests for any affected HTTP endpoints or gRPC services.**
 
 ## Security Constraints & Rules
+- Input Validation: Every endpoint that accepts a request body must validate all fields before touching the DB, cache, or crypto. Invalid input returns 422. Validation lives in a `validate()` method on the request struct, called at the top of the handler.
 - No Manual SQL: All queries must use sqlx::query! or sqlx::query_as! to prevent SQL injection.
 - Secure Hashing: Use Argon2id with 2026-standard parameters (e.g., m_cost=64MB).
 - Cryptographic Signatures: Use Ed25519 for JWTs. Do not use HS256 (symmetric) in a distributed microservice environment.

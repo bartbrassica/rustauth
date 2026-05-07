@@ -61,7 +61,7 @@ async fn register_returns_201_with_user_info(pool: PgPool) {
 
     let res = client
         .post(format!("{base}/register"))
-        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2"}))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
         .send()
         .await
         .unwrap();
@@ -76,7 +76,7 @@ async fn register_returns_201_with_user_info(pool: PgPool) {
 async fn register_duplicate_email_returns_409(pool: PgPool) {
     let base = spawn_app(pool).await;
     let client = reqwest::Client::new();
-    let payload = serde_json::json!({"email": "alice@example.com", "password": "hunter2"});
+    let payload = serde_json::json!({"email": "alice@example.com", "password": "hunter2!"});
 
     client
         .post(format!("{base}/register"))
@@ -103,14 +103,14 @@ async fn login_with_valid_credentials_returns_tokens(pool: PgPool) {
 
     client
         .post(format!("{base}/register"))
-        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2"}))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
         .send()
         .await
         .unwrap();
 
     let res = client
         .post(format!("{base}/login"))
-        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2"}))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
         .send()
         .await
         .unwrap();
@@ -128,7 +128,7 @@ async fn login_with_wrong_password_returns_401(pool: PgPool) {
 
     client
         .post(format!("{base}/register"))
-        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2"}))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
         .send()
         .await
         .unwrap();
@@ -166,14 +166,14 @@ async fn me_with_valid_access_token_returns_user(pool: PgPool) {
 
     client
         .post(format!("{base}/register"))
-        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2"}))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
         .send()
         .await
         .unwrap();
 
     let login: serde_json::Value = client
         .post(format!("{base}/login"))
-        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2"}))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
         .send()
         .await
         .unwrap()
@@ -214,14 +214,14 @@ async fn me_rejects_refresh_token(pool: PgPool) {
 
     client
         .post(format!("{base}/register"))
-        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2"}))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
         .send()
         .await
         .unwrap();
 
     let login: serde_json::Value = client
         .post(format!("{base}/login"))
-        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2"}))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
         .send()
         .await
         .unwrap()
@@ -248,14 +248,14 @@ async fn refresh_issues_new_tokens_and_revokes_old(pool: PgPool) {
 
     client
         .post(format!("{base}/register"))
-        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2"}))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
         .send()
         .await
         .unwrap();
 
     let login: serde_json::Value = client
         .post(format!("{base}/login"))
-        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2"}))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
         .send()
         .await
         .unwrap()
@@ -296,14 +296,14 @@ async fn refresh_rejects_access_token(pool: PgPool) {
 
     client
         .post(format!("{base}/register"))
-        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2"}))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
         .send()
         .await
         .unwrap();
 
     let login: serde_json::Value = client
         .post(format!("{base}/login"))
-        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2"}))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
         .send()
         .await
         .unwrap()
@@ -330,14 +330,14 @@ async fn logout_returns_204_and_revokes_refresh_token(pool: PgPool) {
 
     client
         .post(format!("{base}/register"))
-        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2"}))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
         .send()
         .await
         .unwrap();
 
     let login: serde_json::Value = client
         .post(format!("{base}/login"))
-        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2"}))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
         .send()
         .await
         .unwrap()
@@ -365,4 +365,156 @@ async fn logout_returns_204_and_revokes_refresh_token(pool: PgPool) {
         .unwrap();
 
     assert_eq!(replay.status(), 401);
+}
+
+// --- /register input validation ---
+
+#[sqlx::test]
+async fn register_with_invalid_email_returns_422(pool: PgPool) {
+    let base = spawn_app(pool).await;
+
+    let cases = [
+        "notanemail",
+        "@example.com",
+        "user@nodot",
+        "user@example.",
+        "a@b@c.com",
+    ];
+
+    let client = reqwest::Client::new();
+    for email in cases {
+        let res = client
+            .post(format!("{base}/register"))
+            .json(&serde_json::json!({"email": email, "password": "password123"}))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), 422, "expected 422 for email={email:?}");
+    }
+}
+
+#[sqlx::test]
+async fn register_with_empty_password_returns_422(pool: PgPool) {
+    let base = spawn_app(pool).await;
+
+    let res = reqwest::Client::new()
+        .post(format!("{base}/register"))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": ""}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), 422);
+}
+
+#[sqlx::test]
+async fn register_with_short_password_returns_422(pool: PgPool) {
+    let base = spawn_app(pool).await;
+
+    let res = reqwest::Client::new()
+        .post(format!("{base}/register"))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "short"}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), 422);
+}
+
+#[sqlx::test]
+async fn register_with_password_over_128_chars_returns_422(pool: PgPool) {
+    let base = spawn_app(pool).await;
+    let long_password = "a".repeat(129);
+
+    let res = reqwest::Client::new()
+        .post(format!("{base}/register"))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": long_password}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), 422);
+}
+
+// --- /login input validation ---
+
+#[sqlx::test]
+async fn login_with_invalid_email_returns_422(pool: PgPool) {
+    let base = spawn_app(pool).await;
+
+    let cases = ["notanemail", "@example.com", "user@nodot", "a@b@c.com"];
+
+    let client = reqwest::Client::new();
+    for email in cases {
+        let res = client
+            .post(format!("{base}/login"))
+            .json(&serde_json::json!({"email": email, "password": "anypassword"}))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(res.status(), 422, "expected 422 for email={email:?}");
+    }
+}
+
+#[sqlx::test]
+async fn login_with_empty_password_returns_422(pool: PgPool) {
+    let base = spawn_app(pool).await;
+
+    let res = reqwest::Client::new()
+        .post(format!("{base}/login"))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": ""}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), 422);
+}
+
+#[sqlx::test]
+async fn login_with_password_over_128_chars_returns_422(pool: PgPool) {
+    let base = spawn_app(pool).await;
+    let long_password = "a".repeat(129);
+
+    let res = reqwest::Client::new()
+        .post(format!("{base}/login"))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": long_password}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), 422);
+}
+
+// --- /refresh input validation ---
+
+#[sqlx::test]
+async fn refresh_with_empty_token_returns_422(pool: PgPool) {
+    let base = spawn_app(pool).await;
+
+    let res = reqwest::Client::new()
+        .post(format!("{base}/refresh"))
+        .json(&serde_json::json!({"refresh_token": ""}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), 422);
+}
+
+// --- /logout input validation ---
+
+#[sqlx::test]
+async fn logout_with_empty_token_returns_422(pool: PgPool) {
+    let base = spawn_app(pool).await;
+
+    let res = reqwest::Client::new()
+        .post(format!("{base}/logout"))
+        .json(&serde_json::json!({"refresh_token": ""}))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), 422);
 }

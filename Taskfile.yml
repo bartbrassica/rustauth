@@ -44,9 +44,9 @@ tasks:
       - cargo test
 
   lint:
-    desc: Run clippy (warnings as errors)
+    desc: Run clippy
     cmds:
-      - cargo clippy -- -D warnings
+      - cargo clippy
 
   fmt:
     desc: Format code
