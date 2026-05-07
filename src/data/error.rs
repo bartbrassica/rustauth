@@ -6,6 +6,14 @@ pub enum DataError {
     EmailConflict,
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+    #[error("cache error: {0}")]
+    Cache(redis::RedisError),
+}
+
+impl From<redis::RedisError> for DataError {
+    fn from(e: redis::RedisError) -> Self {
+        Self::Cache(e)
+    }
 }
 
 impl DataError {
