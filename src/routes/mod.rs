@@ -114,7 +114,7 @@ pub async fn refresh(
     State(state): State<AppState>,
     Json(body): Json<RefreshRequest>,
 ) -> Result<Json<LoginResponse>, ApiError> {
-    let claims = state.jwt.verify(&body.refresh_token).map_err(|_| {
+    let claims = state.jwt.verify_refresh(&body.refresh_token).map_err(|_| {
         tracing::warn!(ip = %addr.ip(), event = "refresh_failed", reason = "invalid_token");
         ApiError::Unauthorized
     })?;
@@ -155,7 +155,7 @@ pub async fn logout(
     State(state): State<AppState>,
     Json(body): Json<LogoutRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let claims = state.jwt.verify(&body.refresh_token).map_err(|_| {
+    let claims = state.jwt.verify_refresh(&body.refresh_token).map_err(|_| {
         tracing::warn!(ip = %addr.ip(), event = "logout_failed", reason = "invalid_token");
         ApiError::Unauthorized
     })?;
@@ -177,7 +177,7 @@ pub enum ApiError {
 impl From<DomainError> for ApiError {
     fn from(e: DomainError) -> Self {
         match e {
-            DomainError::InvalidToken(_) => Self::Unauthorized,
+            DomainError::InvalidToken(_) | DomainError::WrongTokenKind => Self::Unauthorized,
             DomainError::Hashing(_) => Self::Internal,
         }
     }
