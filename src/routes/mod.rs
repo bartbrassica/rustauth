@@ -1,6 +1,8 @@
+use std::net::SocketAddr;
+
 use axum::{
     Json,
-    extract::State,
+    extract::{ConnectInfo, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
@@ -28,12 +30,19 @@ pub struct RegisterResponse {
 }
 
 pub async fn register(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
     Json(body): Json<RegisterRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let hash = state.passwords.hash(&body.password)?;
     let repo = UserRepository::new(&state.pool);
-    let user = repo.create(&body.email, &hash).await?;
+    let user = repo.create(&body.email, &hash).await.map_err(|e| {
+        if matches!(e, DataError::EmailConflict) {
+            tracing::warn!(email = %body.email, ip = %addr.ip(), event = "register_failed", reason = "email_conflict");
+        }
+        ApiError::from(e)
+    })?;
+    tracing::info!(email = %user.email, user_id = %user.id, ip = %addr.ip(), event = "register_success");
     Ok((
         StatusCode::CREATED,
         Json(RegisterResponse {
@@ -58,19 +67,24 @@ pub struct LoginResponse {
 }
 
 pub async fn login(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ApiError> {
     let repo = UserRepository::new(&state.pool);
-    let user = repo
-        .find_by_email(&body.email)
-        .await?
-        .ok_or(ApiError::Unauthorized)?;
+    let user = match repo.find_by_email(&body.email).await? {
+        Some(u) => u,
+        None => {
+            tracing::warn!(email = %body.email, ip = %addr.ip(), event = "login_failed", reason = "unknown_email");
+            return Err(ApiError::Unauthorized);
+        }
+    };
 
     if !state
         .passwords
         .verify(&body.password, &user.password_hash)?
     {
+        tracing::warn!(email = %body.email, ip = %addr.ip(), event = "login_failed", reason = "invalid_password");
         return Err(ApiError::Unauthorized);
     }
 
@@ -81,6 +95,7 @@ pub async fn login(
         .store_refresh_token(refresh_jti, user.id, 7 * 24 * 3600)
         .await?;
 
+    tracing::info!(email = %user.email, user_id = %user.id, ip = %addr.ip(), event = "login_success");
     Ok(Json(LoginResponse {
         access_token,
         refresh_token,
@@ -95,17 +110,24 @@ pub struct RefreshRequest {
 }
 
 pub async fn refresh(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
     Json(body): Json<RefreshRequest>,
 ) -> Result<Json<LoginResponse>, ApiError> {
-    let claims = state.jwt.verify(&body.refresh_token)?;
+    let claims = state.jwt.verify(&body.refresh_token).map_err(|_| {
+        tracing::warn!(ip = %addr.ip(), event = "refresh_failed", reason = "invalid_token");
+        ApiError::Unauthorized
+    })?;
 
     let store = TokenStore::new(&state.redis);
     // Atomically consume the old JTI — None means already revoked or unknown.
     store
         .revoke_refresh_token(claims.jti)
         .await?
-        .ok_or(ApiError::Unauthorized)?;
+        .ok_or_else(|| {
+            tracing::warn!(user_id = %claims.sub, ip = %addr.ip(), event = "refresh_failed", reason = "token_revoked");
+            ApiError::Unauthorized
+        })?;
 
     let access_token = state.jwt.sign_access_token(claims.sub, &claims.email)?;
     let (refresh_token, new_jti) = state.jwt.sign_refresh_token(claims.sub, &claims.email)?;
@@ -114,6 +136,7 @@ pub async fn refresh(
         .store_refresh_token(new_jti, claims.sub, 7 * 24 * 3600)
         .await?;
 
+    tracing::info!(user_id = %claims.sub, ip = %addr.ip(), event = "token_refreshed");
     Ok(Json(LoginResponse {
         access_token,
         refresh_token,
@@ -128,13 +151,18 @@ pub struct LogoutRequest {
 }
 
 pub async fn logout(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
     Json(body): Json<LogoutRequest>,
 ) -> Result<StatusCode, ApiError> {
-    let claims = state.jwt.verify(&body.refresh_token)?;
+    let claims = state.jwt.verify(&body.refresh_token).map_err(|_| {
+        tracing::warn!(ip = %addr.ip(), event = "logout_failed", reason = "invalid_token");
+        ApiError::Unauthorized
+    })?;
     TokenStore::new(&state.redis)
         .revoke_refresh_token(claims.jti)
         .await?;
+    tracing::info!(user_id = %claims.sub, ip = %addr.ip(), event = "logout");
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -147,8 +175,11 @@ pub enum ApiError {
 }
 
 impl From<DomainError> for ApiError {
-    fn from(_: DomainError) -> Self {
-        Self::Internal
+    fn from(e: DomainError) -> Self {
+        match e {
+            DomainError::InvalidToken(_) => Self::Unauthorized,
+            DomainError::Hashing(_) => Self::Internal,
+        }
     }
 }
 
