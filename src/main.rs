@@ -1,30 +1,15 @@
-mod data;
-mod domain;
-mod middleware;
-mod routes;
-mod services;
-
 use std::{net::SocketAddr, sync::Arc};
 
-use axum::{
-    Router, middleware as mw,
-    routing::{get, post},
-};
 use dotenvy::dotenv;
 use sqlx::postgres::PgPoolOptions;
 use tonic::transport::Server as TonicServer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use domain::{JwtManager, PasswordService};
-use services::{AuthServiceImpl, AuthServiceServer};
-
-#[derive(Clone)]
-pub struct AppState {
-    pub pool: sqlx::PgPool,
-    pub jwt: Arc<JwtManager>,
-    pub passwords: Arc<PasswordService>,
-    pub redis: redis::Client,
-}
+use rustauth::{
+    AppState, build_production_router,
+    domain::{JwtManager, PasswordService},
+    services::{AuthServiceImpl, AuthServiceServer},
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -71,22 +56,7 @@ async fn main() -> anyhow::Result<()> {
         redis,
     };
 
-    // /login and /register are rate-limited; /refresh and /logout are not
-    // (they already require a valid JWT or refresh token).
-    let rate_limited = Router::new()
-        .route("/login", post(routes::login))
-        .route("/register", post(routes::register))
-        .route_layer(mw::from_fn_with_state(
-            state.clone(),
-            middleware::rate_limit,
-        ));
-
-    let app = Router::new()
-        .merge(rate_limited)
-        .route("/refresh", post(routes::refresh))
-        .route("/logout", post(routes::logout))
-        .route("/me", get(routes::me))
-        .with_state(state.clone());
+    let app = build_production_router(state.clone());
 
     let listener = tokio::net::TcpListener::bind(&http_addr).await?;
     tracing::info!("HTTP listening on {http_addr}");
