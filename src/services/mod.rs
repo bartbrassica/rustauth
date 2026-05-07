@@ -27,7 +27,7 @@ impl AuthService for AuthServiceImpl {
         request: Request<VerifyTokenRequest>,
     ) -> Result<Response<VerifyTokenResponse>, Status> {
         let token = &request.into_inner().token;
-        match self.jwt.verify(token) {
+        match self.jwt.verify_access(token) {
             Ok(claims) => Ok(Response::new(VerifyTokenResponse {
                 valid: true,
                 user_id: claims.sub.to_string(),

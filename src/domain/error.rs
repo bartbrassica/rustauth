@@ -6,6 +6,8 @@ pub enum DomainError {
     Hashing(password_hash::Error),
     #[error("invalid token: {0}")]
     InvalidToken(#[from] jsonwebtoken::errors::Error),
+    #[error("wrong token kind")]
+    WrongTokenKind,
 }
 
 impl From<password_hash::Error> for DomainError {

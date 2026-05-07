@@ -39,7 +39,7 @@ impl FromRequestParts<AppState> for AuthUser {
 
         let claims = state
             .jwt
-            .verify(token)
+            .verify_access(token)
             .map_err(|_| AuthError::InvalidToken)?;
         Ok(AuthUser(claims))
     }
