@@ -18,6 +18,14 @@ impl PasswordService {
         }
     }
 
+    /// Minimal Argon2 params for use in tests — fast but still Argon2id.
+    pub fn for_testing() -> Self {
+        let params = Params::new(1024, 1, 1, None).expect("valid argon2 params");
+        Self {
+            argon2: Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params),
+        }
+    }
+
     pub fn hash(&self, password: &str) -> Result<String, DomainError> {
         let salt = SaltString::generate(&mut OsRng);
         let hash = self.argon2.hash_password(password.as_bytes(), &salt)?;
