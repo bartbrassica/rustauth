@@ -71,6 +71,8 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/register", post(routes::register))
         .route("/login", post(routes::login))
+        .route("/refresh", post(routes::refresh))
+        .route("/logout", post(routes::logout))
         .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind(&http_addr).await?;
