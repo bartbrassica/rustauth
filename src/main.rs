@@ -9,9 +9,11 @@ use std::sync::Arc;
 use axum::{Router, routing::post};
 use dotenvy::dotenv;
 use sqlx::postgres::PgPoolOptions;
+use tonic::transport::Server as TonicServer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use domain::{JwtManager, PasswordService};
+use services::{AuthServiceImpl, AuthServiceServer};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -38,6 +40,9 @@ async fn main() -> anyhow::Result<()> {
     let jwt_private_pem = std::env::var("JWT_PRIVATE_KEY_PEM")?;
     let jwt_public_pem = std::env::var("JWT_PUBLIC_KEY_PEM")?;
     let http_addr = std::env::var("HTTP_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".to_string());
+    let grpc_addr: std::net::SocketAddr = std::env::var("GRPC_ADDR")
+        .unwrap_or_else(|_| "0.0.0.0:50051".to_string())
+        .parse()?;
 
     let pool = PgPoolOptions::new()
         .max_connections(10)
@@ -66,11 +71,24 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/register", post(routes::register))
         .route("/login", post(routes::login))
-        .with_state(state);
+        .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind(&http_addr).await?;
-    tracing::info!("listening on {http_addr}");
-    axum::serve(listener, app).await?;
+    tracing::info!("HTTP listening on {http_addr}");
+    tracing::info!("gRPC listening on {grpc_addr}");
+
+    let grpc = TonicServer::builder()
+        .add_service(AuthServiceServer::new(AuthServiceImpl::new(state.jwt)))
+        .serve(grpc_addr);
+
+    tokio::try_join!(
+        async {
+            axum::serve(listener, app)
+                .await
+                .map_err(anyhow::Error::from)
+        },
+        async { grpc.await.map_err(anyhow::Error::from) },
+    )?;
 
     Ok(())
 }
