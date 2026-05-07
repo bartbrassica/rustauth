@@ -87,6 +87,57 @@ pub async fn login(
     }))
 }
 
+// --- /refresh ---
+
+#[derive(Deserialize)]
+pub struct RefreshRequest {
+    pub refresh_token: String,
+}
+
+pub async fn refresh(
+    State(state): State<AppState>,
+    Json(body): Json<RefreshRequest>,
+) -> Result<Json<LoginResponse>, ApiError> {
+    let claims = state.jwt.verify(&body.refresh_token)?;
+
+    let store = TokenStore::new(&state.redis);
+    // Atomically consume the old JTI — None means already revoked or unknown.
+    store
+        .revoke_refresh_token(claims.jti)
+        .await?
+        .ok_or(ApiError::Unauthorized)?;
+
+    let access_token = state.jwt.sign_access_token(claims.sub, &claims.email)?;
+    let (refresh_token, new_jti) = state.jwt.sign_refresh_token(claims.sub, &claims.email)?;
+
+    store
+        .store_refresh_token(new_jti, claims.sub, 7 * 24 * 3600)
+        .await?;
+
+    Ok(Json(LoginResponse {
+        access_token,
+        refresh_token,
+    }))
+}
+
+// --- /logout ---
+
+#[derive(Deserialize)]
+pub struct LogoutRequest {
+    pub refresh_token: String,
+}
+
+pub async fn logout(
+    State(state): State<AppState>,
+    Json(body): Json<LogoutRequest>,
+) -> Result<StatusCode, ApiError> {
+    let claims = state.jwt.verify(&body.refresh_token)?;
+    TokenStore::new(&state.redis)
+        .revoke_refresh_token(claims.jti)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // --- Error type ---
 
 pub enum ApiError {
