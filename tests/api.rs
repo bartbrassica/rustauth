@@ -7,6 +7,7 @@ use rustauth::{
     AppState, build_router,
     domain::{JwtManager, PasswordService},
 };
+use uuid::Uuid;
 
 // Same test keys as in the jwt unit tests.
 const TEST_PRIVATE_PEM: &[u8] = b"-----BEGIN PRIVATE KEY-----
@@ -651,6 +652,92 @@ async fn delete_me_without_token_returns_401(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(res.status(), 401);
+}
+
+// --- account lockout ---
+
+#[sqlx::test]
+async fn login_locked_after_10_failed_attempts(pool: PgPool) {
+    let base = spawn_app(pool).await;
+    let client = reqwest::Client::new();
+    // Unique email avoids Redis lockout key collisions with concurrent tests.
+    let email = format!("lockout-{}@example.com", Uuid::new_v4());
+
+    client
+        .post(format!("{base}/register"))
+        .json(&serde_json::json!({"email": email, "password": "hunter2!"}))
+        .send()
+        .await
+        .unwrap();
+
+    for _ in 0..10 {
+        client
+            .post(format!("{base}/login"))
+            .json(&serde_json::json!({"email": email, "password": "wrongpass"}))
+            .send()
+            .await
+            .unwrap();
+    }
+
+    // 11th attempt — account must be locked even with the correct password.
+    let res = client
+        .post(format!("{base}/login"))
+        .json(&serde_json::json!({"email": email, "password": "hunter2!"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+}
+
+#[sqlx::test]
+async fn successful_login_resets_lockout_counter(pool: PgPool) {
+    let base = spawn_app(pool).await;
+    let client = reqwest::Client::new();
+    let email = format!("lockout-{}@example.com", Uuid::new_v4());
+
+    client
+        .post(format!("{base}/register"))
+        .json(&serde_json::json!({"email": email, "password": "hunter2!"}))
+        .send()
+        .await
+        .unwrap();
+
+    // Fail 9 times (one under the limit).
+    for _ in 0..9 {
+        client
+            .post(format!("{base}/login"))
+            .json(&serde_json::json!({"email": email, "password": "wrongpass"}))
+            .send()
+            .await
+            .unwrap();
+    }
+
+    // Succeed — counter must reset.
+    let res = client
+        .post(format!("{base}/login"))
+        .json(&serde_json::json!({"email": email, "password": "hunter2!"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+
+    // Fail 9 more times — should still not be locked (counter was reset).
+    for _ in 0..9 {
+        client
+            .post(format!("{base}/login"))
+            .json(&serde_json::json!({"email": email, "password": "wrongpass"}))
+            .send()
+            .await
+            .unwrap();
+    }
+
+    let res = client
+        .post(format!("{base}/login"))
+        .json(&serde_json::json!({"email": email, "password": "hunter2!"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
 }
 
 // --- POST /me/sessions/revoke-all ---

@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    data::{DataError, TokenStore, UserRepository},
+    data::{DataError, LockoutStore, TokenStore, UserRepository},
     domain::DomainError,
     middleware::AuthUser,
 };
@@ -138,6 +138,13 @@ pub async fn login(
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ApiError> {
     body.validate()?;
+
+    let lockout = LockoutStore::new(&state.redis);
+    if lockout.is_locked(&body.email).await? {
+        tracing::warn!(email = %body.email, ip = %addr.ip(), event = "login_failed", reason = "account_locked");
+        return Err(ApiError::Unauthorized);
+    }
+
     let repo = UserRepository::new(&state.pool);
     let user = match repo.find_by_email(&body.email).await? {
         Some(u) => u,
@@ -151,9 +158,12 @@ pub async fn login(
         .passwords
         .verify(&body.password, &user.password_hash)?
     {
-        tracing::warn!(email = %body.email, ip = %addr.ip(), event = "login_failed", reason = "invalid_password");
+        let attempts = lockout.record_failure(&body.email).await?;
+        tracing::warn!(email = %body.email, ip = %addr.ip(), attempts, event = "login_failed", reason = "invalid_password");
         return Err(ApiError::Unauthorized);
     }
+
+    lockout.clear(&body.email).await?;
 
     let access_token = state.jwt.sign_access_token(user.id, &user.email)?;
     let (refresh_token, refresh_jti) = state.jwt.sign_refresh_token(user.id, &user.email)?;
