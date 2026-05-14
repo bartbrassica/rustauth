@@ -330,6 +330,20 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
+// --- POST /me/sessions/revoke-all ---
+
+pub async fn logout_all(
+    AuthUser(claims): AuthUser,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, ApiError> {
+    let count = TokenStore::new(&state.redis)
+        .revoke_all_sessions(claims.sub)
+        .await?;
+    tracing::info!(user_id = %claims.sub, ip = %addr.ip(), sessions_revoked = count, event = "logout_all");
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // --- /logout ---
 
 #[derive(Deserialize)]

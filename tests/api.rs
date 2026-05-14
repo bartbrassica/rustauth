@@ -653,6 +653,102 @@ async fn delete_me_without_token_returns_401(pool: PgPool) {
     assert_eq!(res.status(), 401);
 }
 
+// --- POST /me/sessions/revoke-all ---
+
+#[sqlx::test]
+async fn logout_all_revokes_all_sessions(pool: PgPool) {
+    let base = spawn_app(pool).await;
+    let client = reqwest::Client::new();
+
+    client
+        .post(format!("{base}/register"))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
+        .send()
+        .await
+        .unwrap();
+
+    // Login twice to create two sessions.
+    let login1: serde_json::Value = client
+        .post(format!("{base}/login"))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let login2: serde_json::Value = client
+        .post(format!("{base}/login"))
+        .json(&serde_json::json!({"email": "alice@example.com", "password": "hunter2!"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let res = client
+        .post(format!("{base}/me/sessions/revoke-all"))
+        .bearer_auth(login1["access_token"].as_str().unwrap())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+
+    // Both refresh tokens must now be rejected.
+    let replay1 = client
+        .post(format!("{base}/refresh"))
+        .json(&serde_json::json!({"refresh_token": login1["refresh_token"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay1.status(), 401);
+
+    let replay2 = client
+        .post(format!("{base}/refresh"))
+        .json(&serde_json::json!({"refresh_token": login2["refresh_token"]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay2.status(), 401);
+}
+
+#[sqlx::test]
+async fn logout_all_without_token_returns_401(pool: PgPool) {
+    let base = spawn_app(pool).await;
+
+    let res = reqwest::Client::new()
+        .post(format!("{base}/me/sessions/revoke-all"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+}
+
+#[sqlx::test]
+async fn logout_all_with_no_active_sessions_returns_204(pool: PgPool) {
+    let base = spawn_app(pool).await;
+    let client = reqwest::Client::new();
+    let tokens = register_and_login(&base, &client).await;
+
+    // Manually revoke the one session first.
+    client
+        .post(format!("{base}/logout"))
+        .json(&serde_json::json!({"refresh_token": tokens["refresh_token"]}))
+        .send()
+        .await
+        .unwrap();
+
+    // revoke-all on an already-empty set must still succeed.
+    let res = client
+        .post(format!("{base}/me/sessions/revoke-all"))
+        .bearer_auth(tokens["access_token"].as_str().unwrap())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 204);
+}
+
 // --- /health ---
 
 #[sqlx::test]
