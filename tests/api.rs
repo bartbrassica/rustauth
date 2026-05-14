@@ -652,3 +652,21 @@ async fn delete_me_without_token_returns_401(pool: PgPool) {
         .unwrap();
     assert_eq!(res.status(), 401);
 }
+
+// --- /health ---
+
+#[sqlx::test]
+async fn health_returns_200_when_db_and_redis_are_up(pool: PgPool) {
+    let base = spawn_app(pool).await;
+
+    let res = reqwest::Client::new()
+        .get(format!("{base}/health"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), 200);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["db"], "ok");
+    assert_eq!(body["redis"], "ok");
+}

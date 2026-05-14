@@ -294,6 +294,42 @@ pub async fn delete_me(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// --- /health ---
+
+#[derive(Serialize)]
+pub struct HealthResponse {
+    pub db: &'static str,
+    pub redis: &'static str,
+}
+
+pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    let db_ok = sqlx::query!("SELECT 1 as ping")
+        .fetch_one(&state.pool)
+        .await
+        .is_ok();
+
+    let redis_ok = async {
+        let mut conn = state.redis.get_multiplexed_async_connection().await?;
+        redis::cmd("PING").query_async::<String>(&mut conn).await
+    }
+    .await
+    .is_ok();
+
+    let status = if db_ok && redis_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (
+        status,
+        Json(HealthResponse {
+            db: if db_ok { "ok" } else { "error" },
+            redis: if redis_ok { "ok" } else { "error" },
+        }),
+    )
+}
+
 // --- /logout ---
 
 #[derive(Deserialize)]
