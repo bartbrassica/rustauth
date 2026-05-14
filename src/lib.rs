@@ -24,6 +24,7 @@ pub struct AppState {
 /// Router without rate limiting — for integration tests.
 pub fn build_router(state: AppState) -> Router {
     Router::new()
+        .route("/health", get(routes::health))
         .route("/register", post(routes::register))
         .route("/login", post(routes::login))
         .route("/refresh", post(routes::refresh))
@@ -44,6 +45,7 @@ pub fn build_production_router(state: AppState) -> Router {
         ));
 
     Router::new()
+        .route("/health", get(routes::health))
         .merge(rate_limited)
         .route("/refresh", post(routes::refresh))
         .route("/logout", post(routes::logout))
