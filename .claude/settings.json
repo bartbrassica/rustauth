@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=$(jq -r '.tool_input.file_path // empty'); echo \"$f\" | grep -qE '\\.rs$' || exit 0; cargo fmt --check && cargo clippy",
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); echo \"$f\" | grep -qE '\\.rs$' || exit 0; cargo fmt --quiet && cargo clippy --quiet -- -D warnings",
             "timeout": 60,
             "statusMessage": "fmt / clippy..."
           }
