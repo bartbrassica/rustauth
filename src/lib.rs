@@ -1,5 +1,6 @@
 pub mod data;
 pub mod domain;
+pub mod email;
 pub mod middleware;
 pub mod routes;
 pub mod services;
@@ -12,6 +13,7 @@ use axum::{
 };
 
 use domain::{JwtManager, PasswordService};
+use email::EmailClient;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -19,6 +21,8 @@ pub struct AppState {
     pub jwt: Arc<JwtManager>,
     pub passwords: Arc<PasswordService>,
     pub redis: redis::Client,
+    pub email: Arc<EmailClient>,
+    pub app_base_url: String,
 }
 
 /// Router without rate limiting — for integration tests.
@@ -32,14 +36,26 @@ pub fn build_router(state: AppState) -> Router {
         .route("/me", get(routes::me).delete(routes::delete_me))
         .route("/me/password", patch(routes::change_password))
         .route("/me/sessions/revoke-all", post(routes::logout_all))
+        .route(
+            "/password-reset/request",
+            post(routes::password_reset_request),
+        )
+        .route(
+            "/password-reset/confirm",
+            post(routes::password_reset_confirm),
+        )
         .with_state(state)
 }
 
-/// Production router with per-IP rate limiting on /register and /login.
+/// Production router with per-IP rate limiting on /register, /login, and /password-reset/request.
 pub fn build_production_router(state: AppState) -> Router {
     let rate_limited = Router::new()
         .route("/login", post(routes::login))
         .route("/register", post(routes::register))
+        .route(
+            "/password-reset/request",
+            post(routes::password_reset_request),
+        )
         .route_layer(mw::from_fn_with_state(
             state.clone(),
             middleware::rate_limit,
@@ -53,5 +69,9 @@ pub fn build_production_router(state: AppState) -> Router {
         .route("/me", get(routes::me).delete(routes::delete_me))
         .route("/me/password", patch(routes::change_password))
         .route("/me/sessions/revoke-all", post(routes::logout_all))
+        .route(
+            "/password-reset/confirm",
+            post(routes::password_reset_confirm),
+        )
         .with_state(state)
 }
