@@ -31,6 +31,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/logout", post(routes::logout))
         .route("/me", get(routes::me).delete(routes::delete_me))
         .route("/me/password", patch(routes::change_password))
+        .route("/me/sessions/revoke-all", post(routes::logout_all))
         .with_state(state)
 }
 
@@ -51,5 +52,6 @@ pub fn build_production_router(state: AppState) -> Router {
         .route("/logout", post(routes::logout))
         .route("/me", get(routes::me).delete(routes::delete_me))
         .route("/me/password", patch(routes::change_password))
+        .route("/me/sessions/revoke-all", post(routes::logout_all))
         .with_state(state)
 }
