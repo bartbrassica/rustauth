@@ -113,16 +113,16 @@ tasks:
       - docker build -t rustauth .
 
   docker:up:
-    desc: Start full production stack (app + infra)
+    desc: Start full production stack (app + infra) — set POSTGRES_PASSWORD, JWT_PRIVATE_KEY_PEM, JWT_PUBLIC_KEY_PEM in env first
     cmds:
-      - docker compose --profile prod up -d
+      - docker compose -f docker-compose.prod.yml up --build -d
 
   docker:down:
     desc: Stop full production stack
     cmds:
-      - docker compose --profile prod down
+      - docker compose -f docker-compose.prod.yml down
 
   docker:logs:
     desc: Stream production app logs
     cmds:
-      - docker compose --profile prod logs -f app
+      - docker compose -f docker-compose.prod.yml logs -f app
