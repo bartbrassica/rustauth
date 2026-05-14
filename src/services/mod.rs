@@ -6,6 +6,7 @@ use crate::domain::JwtManager;
 
 tonic::include_proto!("auth");
 
+pub use auth_service_client::AuthServiceClient;
 pub use auth_service_server::AuthServiceServer;
 
 use auth_service_server::AuthService;
