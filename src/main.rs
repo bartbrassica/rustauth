@@ -3,7 +3,7 @@ use std::{net::SocketAddr, sync::Arc};
 use dotenvy::dotenv;
 use sqlx::postgres::PgPoolOptions;
 use tonic::transport::Server as TonicServer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 use rustauth::{
     AppState, build_production_router,
@@ -15,12 +15,18 @@ use rustauth::{
 async fn main() -> anyhow::Result<()> {
     dotenv().ok();
 
+    let fmt_layer = if std::env::var("LOG_FORMAT").as_deref() == Ok("json") {
+        tracing_subscriber::fmt::layer().json().boxed()
+    } else {
+        tracing_subscriber::fmt::layer().boxed()
+    };
+
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "rustauth=debug,tower_http=debug".into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(fmt_layer)
         .init();
 
     let database_url = std::env::var("DATABASE_URL")?;
