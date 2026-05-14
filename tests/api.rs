@@ -6,6 +6,7 @@ use tokio::net::TcpListener;
 use rustauth::{
     AppState, build_router,
     domain::{JwtManager, PasswordService},
+    email::EmailClient,
 };
 use uuid::Uuid;
 
@@ -30,11 +31,14 @@ async fn spawn_app(pool: PgPool) -> String {
     );
     let passwords = Arc::new(PasswordService::for_testing());
 
+    let (email, _) = EmailClient::capturing();
     let state = AppState {
         pool,
         jwt,
         passwords,
         redis,
+        email: Arc::new(email),
+        app_base_url: "http://app.test".to_string(),
     };
     let app = build_router(state);
 

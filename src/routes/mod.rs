@@ -6,15 +6,25 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
     AppState,
-    data::{DataError, LockoutStore, TokenStore, UserRepository},
+    data::{DataError, LockoutStore, ResetTokenRepository, TokenStore, UserRepository},
     domain::DomainError,
     middleware::AuthUser,
 };
+
+fn generate_reset_token() -> (String, String) {
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let raw = hex::encode(bytes);
+    let hash = hex::encode(Sha256::digest(raw.as_bytes()));
+    (raw, hash)
+}
 
 // --- /register ---
 
@@ -387,9 +397,99 @@ pub async fn logout(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// --- /password-reset/request ---
+
+#[derive(Deserialize)]
+pub struct PasswordResetRequestBody {
+    pub email: String,
+}
+
+impl PasswordResetRequestBody {
+    fn validate(&self) -> Result<(), ApiError> {
+        validate_email(&self.email)?;
+        Ok(())
+    }
+}
+
+pub async fn password_reset_request(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
+    Json(body): Json<PasswordResetRequestBody>,
+) -> Result<StatusCode, ApiError> {
+    body.validate()?;
+
+    let repo = UserRepository::new(&state.pool);
+    if let Some(user) = repo.find_by_email(&body.email).await? {
+        let (raw_token, token_hash) = generate_reset_token();
+        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(900);
+
+        ResetTokenRepository::new(&state.pool)
+            .create(user.id, &token_hash, expires_at)
+            .await?;
+
+        let reset_link = format!("{}/reset-password?token={}", state.app_base_url, raw_token);
+        if let Err(e) = state
+            .email
+            .send_password_reset(&user.email, &reset_link)
+            .await
+        {
+            tracing::error!(user_id = %user.id, error = %e, event = "password_reset_email_failed");
+        } else {
+            tracing::info!(user_id = %user.id, ip = %addr.ip(), event = "password_reset_requested");
+        }
+    }
+
+    Ok(StatusCode::OK)
+}
+
+// --- /password-reset/confirm ---
+
+#[derive(Deserialize)]
+pub struct PasswordResetConfirmBody {
+    pub token: String,
+    pub new_password: String,
+}
+
+impl PasswordResetConfirmBody {
+    fn validate(&self) -> Result<(), ApiError> {
+        if self.token.is_empty() {
+            return Err(ApiError::Validation("token is required".into()));
+        }
+        validate_password(&self.new_password)?;
+        Ok(())
+    }
+}
+
+pub async fn password_reset_confirm(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
+    Json(body): Json<PasswordResetConfirmBody>,
+) -> Result<StatusCode, ApiError> {
+    body.validate()?;
+
+    let token_hash = hex::encode(Sha256::digest(body.token.as_bytes()));
+    let user_id = ResetTokenRepository::new(&state.pool)
+        .consume(&token_hash)
+        .await?
+        .ok_or_else(|| ApiError::BadRequest("invalid or expired reset token".into()))?;
+
+    let new_hash = state.passwords.hash(&body.new_password)?;
+    UserRepository::new(&state.pool)
+        .update_password(user_id, &new_hash)
+        .await?;
+
+    TokenStore::new(&state.redis)
+        .revoke_all_sessions(user_id)
+        .await?;
+
+    tracing::info!(user_id = %user_id, ip = %addr.ip(), event = "password_reset_confirmed");
+    Ok(StatusCode::OK)
+}
+
 // --- Error type ---
 
 pub enum ApiError {
+    BadRequest(String),
     Conflict,
     Unauthorized,
     Validation(String),
@@ -417,6 +517,7 @@ impl From<DataError> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         match self {
+            Self::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
             Self::Conflict => (StatusCode::CONFLICT, "email already registered").into_response(),
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "invalid credentials").into_response(),
             Self::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response(),
