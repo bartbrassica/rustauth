@@ -27,23 +27,6 @@ services:
       timeout: 5s
       retries: 5
 
-  app:
-    build: .
-    profiles: [prod]
-    env_file: .env
-    environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-rustauth}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-rustauth}
-      REDIS_URL: redis://redis:6379
-    ports:
-      - "3000:3000"
-      - "50051:50051"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-
 volumes:
   postgres_data:
   redis_data:
